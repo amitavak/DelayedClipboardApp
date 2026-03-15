@@ -2,6 +2,8 @@
 
 A Windows desktop application that demonstrates **delayed clipboard rendering** — a Win32 feature where clipboard data is not generated at copy time but instead produced on-demand when another application requests it via paste.
 
+**[Download DelayedClipboardApp.exe](https://github.com/amitavak/DelayedClipboardApp/releases/latest/download/DelayedClipboardApp.exe)** — self-contained, no .NET runtime required.
+
 ## What is Delayed Clipboard Rendering?
 
 Normally when you copy something, the data is immediately written to the clipboard. With delayed rendering:
@@ -17,7 +19,7 @@ This is useful for expensive data generation, large datasets, or offering multip
 - Configure table dimensions (rows and columns)
 - Select clipboard formats: Plain Text (tab-separated) and/or HTML table
 - Delayed rendering via Win32 API (`SetClipboardData` with NULL data handle)
-- 10-second simulated delay during content generation to demonstrate deferred behavior
+- Configurable simulated delay during content generation to demonstrate deferred behavior
 - Activity log showing the full lifecycle: promise → request → render
 
 ## Prerequisites

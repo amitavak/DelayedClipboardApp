@@ -44,6 +44,7 @@ public class MainForm : Form
     private CheckBox _htmlCheckbox = null!;
     private CheckBox _customFormatCheckbox = null!;
     private Button _copyButton = null!;
+    private Button _clearLogButton = null!;
     private TextBox _logTextBox = null!;
 
     // ========================================================================
@@ -281,16 +282,42 @@ public class MainForm : Form
         layout.Controls.Add(_copyButton, 0, 6);
         layout.SetColumnSpan(_copyButton, 2);
 
-        // --- Row 7: Log label ---
+        // --- Row 7: Log header (label on the left, Clear Logs button on the right) ---
+        // Nested panel so the label and button share a single layout row without
+        // interfering with the main grid's auto/fill column sizing.
+        var logHeaderPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 4)
+        };
+        logHeaderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        logHeaderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        logHeaderPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
         var logLabel = new Label
         {
             Text = "Activity Log:",
             AutoSize = true,
             Anchor = AnchorStyles.Left,
-            Padding = new Padding(0, 8, 0, 0)
+            Padding = new Padding(0, 5, 0, 0)
         };
-        layout.Controls.Add(logLabel, 0, 7);
-        layout.SetColumnSpan(logLabel, 2);
+        logHeaderPanel.Controls.Add(logLabel, 0, 0);
+
+        _clearLogButton = new Button
+        {
+            Text = "Clear Logs",
+            AutoSize = true,
+            Anchor = AnchorStyles.Right,
+            Padding = new Padding(8, 2, 8, 2)
+        };
+        _clearLogButton.Click += OnClearLogButtonClick;
+        logHeaderPanel.Controls.Add(_clearLogButton, 1, 0);
+
+        layout.Controls.Add(logHeaderPanel, 0, 7);
+        layout.SetColumnSpan(logHeaderPanel, 2);
 
         // --- Row 8: Log text box (fills remaining vertical space) ---
         _logTextBox = new TextBox
@@ -469,6 +496,18 @@ public class MainForm : Form
             // Step 5: Always close the clipboard, even if errors occurred.
             NativeMethods.CloseClipboard();
         }
+    }
+
+    /// <summary>
+    /// Handles the "Clear Logs" button click. Empties the activity log so the
+    /// user can focus on the most recent messages. Safe to call at any time —
+    /// clearing the UI text box has no effect on the clipboard state or any
+    /// in-progress rendering.
+    /// </summary>
+    private void OnClearLogButtonClick(object? sender, EventArgs e)
+    {
+        _logTextBox.Clear();
+        Log("Activity log cleared.");
     }
 
     // ========================================================================

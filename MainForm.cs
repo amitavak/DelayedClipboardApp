@@ -42,6 +42,7 @@ public class MainForm : Form
     private NumericUpDown _delayInput = null!;
     private CheckBox _plainTextCheckbox = null!;
     private CheckBox _htmlCheckbox = null!;
+    private CheckBox _customFormatCheckbox = null!;
     private Button _copyButton = null!;
     private TextBox _logTextBox = null!;
 
@@ -56,6 +57,23 @@ public class MainForm : Form
     /// All Windows applications use the same registered name "HTML Format".
     /// </summary>
     private uint _cfHtml;
+
+    /// <summary>
+    /// The registered clipboard format ID for the Chromium Web Custom Format
+    /// Map ("Web Custom Format Map"). This format holds a small JSON object
+    /// that maps MIME-like identifiers (e.g., "web data/my-custom-format")
+    /// to the registered format name that carries the actual payload bytes.
+    /// Chromium-based browsers read this map first when resolving a custom
+    /// format via the Async Clipboard API.
+    /// </summary>
+    private uint _cfWebCustomMap;
+
+    /// <summary>
+    /// The registered clipboard format ID for "Web Custom Format0" — the
+    /// Chromium-reserved payload slot our JSON actually lives in. The map
+    /// format above points "web data/my-custom-format" at this slot.
+    /// </summary>
+    private uint _cfWebCustomFormat0;
 
     /// <summary>
     /// The number of rows the user specified when they clicked "Copy".
@@ -75,6 +93,13 @@ public class MainForm : Form
 
     /// <summary>Whether we promised "HTML Format" to the clipboard.</summary>
     private bool _promisedHtml;
+
+    /// <summary>
+    /// Whether we promised the Chromium web custom format to the clipboard.
+    /// A single flag covers both the "Web Custom Format Map" and the
+    /// "Web Custom Format0" payload slot — they always travel together.
+    /// </summary>
+    private bool _promisedCustom;
 
     /// <summary>
     /// The delay in seconds snapshotted at copy time.
@@ -111,7 +136,16 @@ public class MainForm : Form
         // This returns a unique format ID that is consistent across all apps.
         // If another app has already registered "HTML Format", we get the same ID.
         _cfHtml = NativeMethods.RegisterClipboardFormat("HTML Format");
+
+        // Register the two Chromium web-custom-format clipboard formats.
+        // The map is metadata; the slot holds our JSON payload bytes. Both
+        // IDs stay stable across apps because RegisterClipboardFormat hashes
+        // the exact string to a canonical ID.
+        _cfWebCustomMap = NativeMethods.RegisterClipboardFormat("Web Custom Format Map");
+        _cfWebCustomFormat0 = NativeMethods.RegisterClipboardFormat(ContentGenerator.WebCustomFormatSlotName);
+
         Log($"Application started. Registered 'HTML Format' clipboard format (ID: {_cfHtml}).");
+        Log($"Registered 'Web Custom Format Map' (ID: {_cfWebCustomMap}) and '{ContentGenerator.WebCustomFormatSlotName}' (ID: {_cfWebCustomFormat0}).");
         Log("Configure rows, columns, and formats, then click 'Copy to Clipboard'.");
     }
 
@@ -128,9 +162,9 @@ public class MainForm : Form
     {
         // Form properties
         Text = "Delayed Clipboard App";
-        Size = new Size(520, 540);
+        Size = new Size(520, 580);
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(420, 460);
+        MinimumSize = new Size(420, 490);
 
         // Use a TableLayoutPanel for responsive layout that handles resizing
         var layout = new TableLayoutPanel
@@ -138,7 +172,7 @@ public class MainForm : Form
             Dock = DockStyle.Fill,
             Padding = new Padding(15),
             ColumnCount = 2,
-            RowCount = 8,
+            RowCount = 9,
         };
 
         // Column 0: labels (auto-size to content)
@@ -220,12 +254,22 @@ public class MainForm : Form
             Text = "Include HTML (text/html)",
             Checked = true,
             AutoSize = true,
-            Padding = new Padding(0, 0, 0, 5)
         };
         layout.Controls.Add(_htmlCheckbox, 0, 4);
         layout.SetColumnSpan(_htmlCheckbox, 2);
 
-        // --- Row 5: Copy button ---
+        // --- Row 5: Custom format checkbox (Chromium web custom format) ---
+        _customFormatCheckbox = new CheckBox
+        {
+            Text = $"Include Custom Format ({ContentGenerator.WebCustomFormatDisplayName})",
+            Checked = false,
+            AutoSize = true,
+            Padding = new Padding(0, 0, 0, 5)
+        };
+        layout.Controls.Add(_customFormatCheckbox, 0, 5);
+        layout.SetColumnSpan(_customFormatCheckbox, 2);
+
+        // --- Row 6: Copy button ---
         _copyButton = new Button
         {
             Text = "Copy to Clipboard",
@@ -234,10 +278,10 @@ public class MainForm : Form
             Font = new Font(Font.FontFamily, 10, FontStyle.Bold)
         };
         _copyButton.Click += OnCopyButtonClick;
-        layout.Controls.Add(_copyButton, 0, 5);
+        layout.Controls.Add(_copyButton, 0, 6);
         layout.SetColumnSpan(_copyButton, 2);
 
-        // --- Row 6: Log label ---
+        // --- Row 7: Log label ---
         var logLabel = new Label
         {
             Text = "Activity Log:",
@@ -245,10 +289,10 @@ public class MainForm : Form
             Anchor = AnchorStyles.Left,
             Padding = new Padding(0, 8, 0, 0)
         };
-        layout.Controls.Add(logLabel, 0, 6);
+        layout.Controls.Add(logLabel, 0, 7);
         layout.SetColumnSpan(logLabel, 2);
 
-        // --- Row 7: Log text box (fills remaining vertical space) ---
+        // --- Row 8: Log text box (fills remaining vertical space) ---
         _logTextBox = new TextBox
         {
             Multiline = true,
@@ -258,7 +302,7 @@ public class MainForm : Form
             BackColor = SystemColors.Window,
             Font = new Font("Consolas", 9)  // Monospace for alignment
         };
-        layout.Controls.Add(_logTextBox, 0, 7);
+        layout.Controls.Add(_logTextBox, 0, 8);
         layout.SetColumnSpan(_logTextBox, 2);
 
         // Row sizing: all rows auto-size except the last one (log) which fills remaining space
@@ -267,9 +311,10 @@ public class MainForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // row 2: Delay
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // row 3: Plain text checkbox
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // row 4: HTML checkbox
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // row 5: Copy button
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // row 6: Log label
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // row 7: Log (fills space)
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // row 5: Custom format checkbox
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // row 6: Copy button
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // row 7: Log label
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // row 8: Log (fills space)
 
         Controls.Add(layout);
     }
@@ -290,10 +335,10 @@ public class MainForm : Form
     private void OnCopyButtonClick(object? sender, EventArgs e)
     {
         // Validate: at least one format must be selected
-        if (!_plainTextCheckbox.Checked && !_htmlCheckbox.Checked)
+        if (!_plainTextCheckbox.Checked && !_htmlCheckbox.Checked && !_customFormatCheckbox.Checked)
         {
             MessageBox.Show(
-                "Please select at least one format (Plain Text or HTML).",
+                "Please select at least one format (Plain Text, HTML, or Custom Format).",
                 "No Format Selected",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
@@ -365,9 +410,15 @@ public class MainForm : Form
             _promisedDelaySeconds = (int)_delayInput.Value;
             _promisedPlainText = _plainTextCheckbox.Checked;
             _promisedHtml = _htmlCheckbox.Checked;
+            _promisedCustom = _customFormatCheckbox.Checked;
+
+            var formatList = new List<string>();
+            if (_promisedPlainText) formatList.Add("PlainText");
+            if (_promisedHtml) formatList.Add("HTML");
+            if (_promisedCustom) formatList.Add("WebCustomFormat");
 
             Log($"Copy initiated: {_promisedRows} rows x {_promisedColumns} columns, delay: {_promisedDelaySeconds}s");
-            Log($"Formats: {(_promisedPlainText ? "PlainText" : "")}{(_promisedPlainText && _promisedHtml ? " + " : "")}{(_promisedHtml ? "HTML" : "")}");
+            Log($"Formats: {string.Join(" + ", formatList)}");
 
             // Step 4: Promise formats using delayed rendering.
             // By passing IntPtr.Zero as the data handle, we tell Windows:
@@ -390,6 +441,25 @@ public class MainForm : Form
                     Log($"ERROR: Failed to promise HTML Format (ID: {_cfHtml}).");
                 else
                     Log($"Promised HTML Format (ID: {_cfHtml}) — data will be generated on paste.");
+            }
+
+            // The web custom format requires two promises: the map (metadata
+            // pointing to the payload slot) and the slot itself (the JSON).
+            // Both must be promised for Chromium-aware consumers to find
+            // "web data/my-custom-format" on the clipboard.
+            if (_promisedCustom)
+            {
+                IntPtr mapResult = NativeMethods.SetClipboardData(_cfWebCustomMap, IntPtr.Zero);
+                if (mapResult == IntPtr.Zero)
+                    Log($"ERROR: Failed to promise Web Custom Format Map (ID: {_cfWebCustomMap}).");
+                else
+                    Log($"Promised Web Custom Format Map (ID: {_cfWebCustomMap}) — map will be generated on paste.");
+
+                IntPtr slotResult = NativeMethods.SetClipboardData(_cfWebCustomFormat0, IntPtr.Zero);
+                if (slotResult == IntPtr.Zero)
+                    Log($"ERROR: Failed to promise {ContentGenerator.WebCustomFormatSlotName} (ID: {_cfWebCustomFormat0}).");
+                else
+                    Log($"Promised {ContentGenerator.WebCustomFormatSlotName} (ID: {_cfWebCustomFormat0}) — payload will be generated on paste.");
             }
 
             Log("Clipboard is ready. Try pasting (Ctrl+V) in another application!");
@@ -438,6 +508,7 @@ public class MainForm : Form
                 Log("Clipboard ownership lost — another application took the clipboard.");
                 _promisedPlainText = false;
                 _promisedHtml = false;
+                _promisedCustom = false;
                 return;
         }
 
@@ -456,13 +527,15 @@ public class MainForm : Form
     /// The clipboard is already open on our behalf — do NOT call
     /// OpenClipboard/CloseClipboard inside this handler.
     ///
-    /// This method introduces an artificial delay to demonstrate that
-    /// delayed rendering can involve time-consuming operations. The delay
-    /// uses a loop with Application.DoEvents() instead of Thread.Sleep so
-    /// that the UI stays responsive and the user can click "Copy to Clipboard"
-    /// to cancel the current rendering and start fresh.
+    /// Delay behavior:
+    /// - Payload formats (plain text, HTML, web custom payload) wait the
+    ///   user-configured delay to simulate expensive generation.
+    /// - The Web Custom Format Map renders instantly — it is trivial
+    ///   metadata with a fixed structure. This avoids doubling the
+    ///   apparent paste latency when a Chromium consumer fetches both
+    ///   the map and the payload for a single paste.
     ///
-    /// Cancellation flow:
+    /// Cancellation flow (payload formats only):
     /// 1. User clicks Copy during the delay → OnCopyButtonClick sets _cancelRendering
     /// 2. The delay loop detects the flag and exits early
     /// 3. We skip data generation (Windows treats the format as empty)
@@ -477,59 +550,29 @@ public class MainForm : Form
 
         string formatName = GetFormatName(format);
         Log($">>> WM_RENDERFORMAT received — format requested: {formatName}");
-        Log($"    Generating {_promisedRows}x{_promisedColumns} table content...");
-        Log($"    Simulating {_promisedDelaySeconds}-second delay (click 'Copy to Clipboard' to cancel)...");
 
-        // Force the log TextBox to repaint immediately so the user can see
-        // the status before we enter the delay loop.
-        _logTextBox.Update();
-
-        // Cancellable delay loop.
-        // Instead of Thread.Sleep(10000) which blocks the UI completely,
-        // we loop with small sleeps and pump the message queue via DoEvents.
-        // This keeps the UI responsive so the user can click "Copy to Clipboard"
-        // to cancel the rendering and start a fresh copy operation.
-        const int sleepIntervalMs = 50;
-        int elapsed = 0;
-        while (elapsed < _promisedDelaySeconds * 1000)
+        // Dispatch on format. The map renders without a delay; everything
+        // else is treated as an "expensive" payload and uses the delay loop.
+        if (format == _cfWebCustomMap && _promisedCustom)
         {
-            // Process pending Windows messages (button clicks, repaints, etc.)
-            // This is what allows OnCopyButtonClick to fire during the delay.
-            Application.DoEvents();
-
-            // Check if the user clicked "Copy to Clipboard" during DoEvents,
-            // which sets _cancelRendering = true.
-            if (_cancelRendering)
-                break;
-
-            // Small sleep to avoid busy-waiting and reduce CPU usage
-            Thread.Sleep(sleepIntervalMs);
-            elapsed += sleepIntervalMs;
+            Log("    Generating Web Custom Format Map (instant, no delay)...");
+            _logTextBox.Update();
+            RenderWebCustomMap();
         }
-
-        // If cancelled, skip data generation and re-trigger the copy operation.
-        // Not calling SetClipboardData here means Windows treats the format as
-        // empty — that's fine because PerformCopy will re-promise fresh formats.
-        if (_cancelRendering)
+        else if (format == NativeMethods.CF_UNICODETEXT && _promisedPlainText)
         {
-            Log("    Rendering cancelled. Will re-promise formats with new settings.");
-            _isRendering = false;
-
-            // Use BeginInvoke to call PerformCopy AFTER WM_RENDERFORMAT has fully
-            // returned. We can't call it directly because the clipboard is still
-            // open on our behalf during WM_RENDERFORMAT processing.
-            BeginInvoke(PerformCopy);
-            return;
-        }
-
-        // Normal rendering — generate and provide the requested data
-        if (format == NativeMethods.CF_UNICODETEXT && _promisedPlainText)
-        {
+            if (RunCancellableDelay()) return;
             RenderPlainText();
         }
         else if (format == _cfHtml && _promisedHtml)
         {
+            if (RunCancellableDelay()) return;
             RenderHtml();
+        }
+        else if (format == _cfWebCustomFormat0 && _promisedCustom)
+        {
+            if (RunCancellableDelay()) return;
+            RenderWebCustomPayload();
         }
         else
         {
@@ -537,6 +580,46 @@ public class MainForm : Form
         }
 
         _isRendering = false;
+    }
+
+    /// <summary>
+    /// Runs the cancellable delay loop used before generating a payload
+    /// format. Returns true if the user cancelled mid-delay, in which case
+    /// the caller must return immediately without calling SetClipboardData —
+    /// PerformCopy will be re-scheduled via BeginInvoke to re-promise fresh
+    /// formats after WM_RENDERFORMAT has fully returned.
+    ///
+    /// Uses Application.DoEvents + small Thread.Sleep intervals instead of
+    /// a single Thread.Sleep so the UI stays responsive and the user's
+    /// second Copy click can fire OnCopyButtonClick to flip _cancelRendering.
+    /// </summary>
+    /// <returns>true if cancelled and caller should abort; false otherwise.</returns>
+    private bool RunCancellableDelay()
+    {
+        Log($"    Generating {_promisedRows}x{_promisedColumns} table content...");
+        Log($"    Simulating {_promisedDelaySeconds}-second delay (click 'Copy to Clipboard' to cancel)...");
+        _logTextBox.Update();
+
+        const int sleepIntervalMs = 50;
+        int elapsed = 0;
+        while (elapsed < _promisedDelaySeconds * 1000)
+        {
+            Application.DoEvents();
+            if (_cancelRendering)
+                break;
+            Thread.Sleep(sleepIntervalMs);
+            elapsed += sleepIntervalMs;
+        }
+
+        if (_cancelRendering)
+        {
+            Log("    Rendering cancelled. Will re-promise formats with new settings.");
+            _isRendering = false;
+            BeginInvoke(PerformCopy);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -572,6 +655,15 @@ public class MainForm : Form
             {
                 Log("    Rendering HTML for clipboard persistence...");
                 RenderHtml();
+            }
+
+            if (_promisedCustom)
+            {
+                Log("    Rendering Web Custom Format Map for clipboard persistence...");
+                RenderWebCustomMap();
+
+                Log("    Rendering Web Custom Format payload for clipboard persistence...");
+                RenderWebCustomPayload();
             }
         }
         finally
@@ -678,6 +770,86 @@ public class MainForm : Form
         Log($"    HTML rendered and placed on clipboard ({bytes.Length} bytes, UTF-8).");
     }
 
+    /// <summary>
+    /// Generates the Chromium Web Custom Format Map JSON and places it on
+    /// the clipboard under the "Web Custom Format Map" registered format.
+    ///
+    /// The map is a tiny JSON object — no delay is applied when rendering
+    /// it. Unlike the text formats, no null terminator is appended: the
+    /// clipboard-provided byte size is authoritative for binary/structured
+    /// custom formats, and a trailing NUL would corrupt strict JSON parsers
+    /// that read the full buffer.
+    /// </summary>
+    private void RenderWebCustomMap()
+    {
+        string json = ContentGenerator.GenerateWebCustomFormatMap();
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(json);
+
+        IntPtr hGlobal = NativeMethods.GlobalAlloc(
+            NativeMethods.GMEM_MOVEABLE,
+            (UIntPtr)bytes.Length);
+
+        if (hGlobal == IntPtr.Zero)
+        {
+            Log("    ERROR: GlobalAlloc failed for Web Custom Format Map.");
+            return;
+        }
+
+        IntPtr ptr = NativeMethods.GlobalLock(hGlobal);
+        if (ptr == IntPtr.Zero)
+        {
+            Log("    ERROR: GlobalLock failed for Web Custom Format Map.");
+            NativeMethods.GlobalFree(hGlobal);
+            return;
+        }
+
+        Marshal.Copy(bytes, 0, ptr, bytes.Length);
+        NativeMethods.GlobalUnlock(hGlobal);
+
+        NativeMethods.SetClipboardData(_cfWebCustomMap, hGlobal);
+
+        Log($"    Web Custom Format Map rendered and placed on clipboard ({bytes.Length} bytes, UTF-8): {json}");
+    }
+
+    /// <summary>
+    /// Generates the custom JSON payload and places it on the clipboard
+    /// under the "Web Custom Format0" registered format (the slot the map
+    /// points to for "web data/my-custom-format").
+    ///
+    /// UTF-8 encoded, no null terminator — consumers use GlobalSize / the
+    /// clipboard-provided byte length as the authoritative size.
+    /// </summary>
+    private void RenderWebCustomPayload()
+    {
+        string json = ContentGenerator.GenerateCustomFormatJson(_promisedRows, _promisedColumns);
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(json);
+
+        IntPtr hGlobal = NativeMethods.GlobalAlloc(
+            NativeMethods.GMEM_MOVEABLE,
+            (UIntPtr)bytes.Length);
+
+        if (hGlobal == IntPtr.Zero)
+        {
+            Log("    ERROR: GlobalAlloc failed for Web Custom Format payload.");
+            return;
+        }
+
+        IntPtr ptr = NativeMethods.GlobalLock(hGlobal);
+        if (ptr == IntPtr.Zero)
+        {
+            Log("    ERROR: GlobalLock failed for Web Custom Format payload.");
+            NativeMethods.GlobalFree(hGlobal);
+            return;
+        }
+
+        Marshal.Copy(bytes, 0, ptr, bytes.Length);
+        NativeMethods.GlobalUnlock(hGlobal);
+
+        NativeMethods.SetClipboardData(_cfWebCustomFormat0, hGlobal);
+
+        Log($"    Web Custom Format payload rendered and placed on clipboard ({bytes.Length} bytes, UTF-8).");
+    }
+
     // ========================================================================
     // Utility Methods
     // ========================================================================
@@ -689,6 +861,8 @@ public class MainForm : Form
     {
         if (format == NativeMethods.CF_UNICODETEXT) return "CF_UNICODETEXT (Plain Text)";
         if (format == _cfHtml) return "HTML Format";
+        if (format == _cfWebCustomMap) return "Web Custom Format Map";
+        if (format == _cfWebCustomFormat0) return $"{ContentGenerator.WebCustomFormatSlotName} ({ContentGenerator.WebCustomFormatDisplayName} payload)";
         return $"Unknown Format (ID: {format})";
     }
 

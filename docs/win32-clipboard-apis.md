@@ -232,6 +232,10 @@ GlobalFree(hGlobal)               → clean up since clipboard never got it
 | `CF_DIB` | 8 | — | Device-independent bitmap |
 | `CF_HDROP` | 15 | — | File list (drag-and-drop) |
 | `"HTML Format"` | Registered | UTF-8 | HTML content (registered via `RegisterClipboardFormat`) |
+| `"Web Custom Format Map"` | Registered | UTF-8 | Chromium-reserved JSON object mapping MIME keys (e.g., `web data/my-custom-format`) to payload slot names |
+| `"Web Custom Format0"` .. `"Web Custom Format15"` | Registered | UTF-8 | Chromium-reserved payload slots referenced by the map — one MIME type per slot |
+
+See [web-custom-format.md](web-custom-format.md) for the Chromium Web Custom Format Map conventions.
 
 ## References
 

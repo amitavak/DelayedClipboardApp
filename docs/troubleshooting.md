@@ -100,6 +100,70 @@ Log(htmlData);  // Print the full string and manually verify offsets
 
 ---
 
+## Web Custom Format Invisible to Chrome / Edge (but Visible in Native Clipboard Viewers)
+
+**Symptom:** A native clipboard viewer (e.g., [Free Clipboard Viewer](https://freeclipboardviewer.com/))
+shows all formats correctly — plain text, HTML, `Web Custom Format Map`,
+and `Web Custom Format0` with the JSON payload. But when a web page in
+Chrome or Edge calls `navigator.clipboard.read()`, the custom format
+never appears in `item.types`. Plain text and HTML come through fine.
+
+**Root cause:** The JSON key in the `Web Custom Format Map` includes the
+`"web "` prefix (e.g., `{"web data/my-custom-format": "Web Custom Format0"}`).
+Chromium's reader
+(`ui/base/clipboard/clipboard.cc::OnCustomFormatDataRead`) validates
+each key via `net::ParseMimeTypeWithoutParameter`. That function splits
+the key on `/` and requires both parts to be valid HTTP tokens — and
+HTTP tokens cannot contain spaces. So `"web data"` (the part before `/`)
+fails, the entry is skipped, and the custom format disappears from the
+consumer's view.
+
+**Fix:** Use the **bare MIME type** as the key, not the `"web "`-prefixed
+form. Chromium prepends `"web "` itself when surfacing the type to JS.
+
+```json
+// ❌ WRONG — Chromium silently drops this entry
+{"web data/my-custom-format":"Web Custom Format0"}
+
+// ✅ CORRECT — key is a valid MIME, Chromium adds "web " for JS
+{"data/my-custom-format":"Web Custom Format0"}
+```
+
+**Diagnosis:** In the web page, log `item.types` immediately after
+`navigator.clipboard.read()`:
+- If the custom type is missing from `types`, the map key is malformed
+  (or the top/subtype parts aren't valid HTTP tokens).
+- If the custom type appears in `types` but `item.getType(...)` rejects
+  or times out, the map is valid but the payload slot isn't being
+  rendered in time — see the delay-timeout section below.
+
+See [web-custom-format.md](web-custom-format.md) for the full map
+convention.
+
+---
+
+## Web Custom Format Times Out in Chrome When Delay is High
+
+**Symptom:** Chrome returns an empty array from `navigator.clipboard.read()`
+on the first click; on a second click it returns plain text and HTML
+but not the web custom format payload, even though the map itself
+parses correctly.
+
+**Root cause:** Chromium imposes an internal timeout on synchronous
+`GetClipboardData` calls. If `WM_RENDERFORMAT` takes longer than
+Chromium's budget (empirically a few seconds), Chromium abandons the
+read for that format. On a follow-up click, any format whose
+`WM_RENDERFORMAT` already completed on our side is now real (not
+promised) and returns instantly — so plain text and HTML appear, but
+the still-promised web custom payload hits the timeout again.
+
+**Fix:** Lower the simulated delay for testing with Chrome/Edge.
+Native apps like Free Clipboard Viewer block indefinitely on
+`GetClipboardData` and are not subject to this timeout — they see all
+formats regardless of delay.
+
+---
+
 ## HTML Renders as Plain Text in Target App
 
 **Symptom:** Pasting into Word or a rich-text editor shows the raw HTML tags instead of a formatted table.

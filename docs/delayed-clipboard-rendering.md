@@ -89,6 +89,32 @@ Two cleanup scenarios exist:
 4. **WM_RENDERFORMAT is synchronous** — the pasting app blocks until you provide data.
 5. **EmptyClipboard() is required** before promising formats — it transfers clipboard ownership to your window.
 
+## Multi-Format Paste: Map + Payload Round Trip
+
+A single paste can trigger **multiple** `WM_RENDERFORMAT` messages when
+a consumer needs more than one format. The Chromium Web Custom Format
+Map convention used by this project is the clearest example:
+
+```
+Consumer pastes `web data/my-custom-format`
+    │
+    ├── Windows sends WM_RENDERFORMAT for "Web Custom Format Map"
+    │      └── We generate the map JSON instantly (no delay)
+    │          {"web data/my-custom-format":"Web Custom Format0"}
+    │
+    ├── Consumer parses the map, resolves MIME → "Web Custom Format0"
+    │
+    └── Windows sends WM_RENDERFORMAT for "Web Custom Format0"
+           └── We run the cancellable delay loop, then generate payload
+               [{"row":1,"col":1,"content":"Cell(1,1)"}, ...]
+```
+
+Design rule: render *payload* formats through the delay loop, render
+*metadata* formats (like the map) instantly. This keeps paste latency
+bounded by the single payload delay regardless of how many lookup
+messages the consumer sends first. See
+[web-custom-format.md](web-custom-format.md) for details.
+
 ## Comparison: Normal vs Delayed Rendering
 
 | Aspect | Normal Rendering | Delayed Rendering |

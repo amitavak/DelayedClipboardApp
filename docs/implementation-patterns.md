@@ -275,7 +275,7 @@ byte[] textBytes = Encoding.UTF8.GetBytes(text);
 byte[] textBytes = Encoding.Unicode.GetBytes(text + '\0');
 ```
 
-### 5. Forgetting the Null Terminator
+### 5. Forgetting the Null Terminator (Text Formats)
 
 ```csharp
 // ❌ WRONG — missing null terminator
@@ -284,6 +284,21 @@ byte[] bytes = Encoding.Unicode.GetBytes(text);
 // ✅ CORRECT — append null character before encoding
 byte[] bytes = Encoding.Unicode.GetBytes(text + '\0');
 ```
+
+**Exception — binary / structured custom formats:** Do *not* append a
+null terminator for formats like the Chromium Web Custom Format Map or
+Web Custom Format payload slots. Their size is conveyed by the
+clipboard's own byte count, and a trailing NUL would corrupt strict
+readers (e.g., JSON parsers reading the full buffer by size):
+
+```csharp
+// ✅ CORRECT — JSON custom format, no null terminator
+byte[] bytes = Encoding.UTF8.GetBytes(json);
+```
+
+Rule of thumb: legacy text formats (CF_UNICODETEXT, HTML Format)
+historically carry a null terminator for C-string compatibility; modern
+binary/structured formats use size-authoritative framing and should not.
 
 ### 6. Missing [STAThread] Attribute
 
@@ -313,6 +328,37 @@ Clipboard.SetText(null);  // This doesn't promise a format
 // ✅ CORRECT — use Win32 P/Invoke
 NativeMethods.SetClipboardData(CF_UNICODETEXT, IntPtr.Zero);
 ```
+
+---
+
+## Pattern 8: Metadata Formats Render Instantly (Skip the Delay)
+
+When a single paste can trigger multiple `WM_RENDERFORMAT` messages —
+for example, a Chromium consumer fetching both `Web Custom Format Map`
+and `Web Custom Format0` — apply the simulated delay *only* to payload
+formats. Metadata formats (maps, descriptors, fixed headers) should
+render immediately.
+
+```csharp
+private void HandleRenderFormat(uint format)
+{
+    if (format == _cfWebCustomMap && _promisedCustom)
+    {
+        // Metadata — render instantly so it doesn't double the paste latency
+        RenderWebCustomMap();
+    }
+    else if (format == _cfWebCustomFormat0 && _promisedCustom)
+    {
+        // Payload — apply the cancellable delay loop
+        if (RunCancellableDelay()) return;
+        RenderWebCustomPayload();
+    }
+    // ...
+}
+```
+
+Without this split, a consumer that fetches metadata-then-payload would
+experience `2 × delay` seconds per paste instead of `1 × delay`.
 
 ---
 

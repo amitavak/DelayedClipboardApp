@@ -7,8 +7,8 @@ This is a Windows-only WinForms application (.NET 9) that demonstrates **delayed
 ## Architecture
 
 - **NativeMethods.cs** — All Win32 P/Invoke declarations (user32.dll, kernel32.dll). Clipboard functions and global memory management.
-- **ContentGenerator.cs** — Pure content generation. Produces plain text (tab-separated) and HTML (Windows HTML clipboard format with byte offset headers). No clipboard or UI dependencies.
-- **MainForm.cs** — The main form. Builds UI programmatically (no designer files). Overrides `WndProc` to handle `WM_RENDERFORMAT`, `WM_RENDERALLFORMATS`, and `WM_DESTROYCLIPBOARD`.
+- **ContentGenerator.cs** — Pure content generation. Produces plain text (tab-separated), HTML (Windows HTML clipboard format with byte offset headers), and JSON for the Chromium web custom format (payload + map). No clipboard or UI dependencies.
+- **MainForm.cs** — The main form. Builds UI programmatically (no designer files). Overrides `WndProc` to handle `WM_RENDERFORMAT`, `WM_RENDERALLFORMATS`, and `WM_DESTROYCLIPBOARD`. Dispatches render requests per format — metadata formats (map) render instantly; payload formats run through the cancellable delay loop (`RunCancellableDelay`).
 - **Program.cs** — Entry point. `[STAThread]` is required for clipboard/COM operations.
 
 ## Key Technical Decisions
@@ -22,6 +22,9 @@ This is a Windows-only WinForms application (.NET 9) that demonstrates **delayed
 
 - **CF_UNICODETEXT (13)**: Built-in format. Data is UTF-16, null-terminated, in `GlobalAlloc(GMEM_MOVEABLE)` memory.
 - **HTML Format**: Registered format (name: "HTML Format"). Data is UTF-8 with a specific header containing `StartHTML`, `EndHTML`, `StartFragment`, `EndFragment` byte offsets.
+- **Web Custom Format (Chromium map indirection)**: Two registered formats traveling together:
+  - **"Web Custom Format Map"** — UTF-8 JSON object mapping **bare MIME types** to payload slot names. We publish `{"data/my-custom-format":"Web Custom Format0"}`. **No null terminator.** Renders instantly (metadata — no delay). **Critical:** the JSON key must NOT include the `"web "` prefix — Chromium prepends it itself when surfacing the type to JS, and if we include it, Chromium's MIME validator silently drops the entry (the space in `"web data"` breaks HTTP-token validation).
+  - **"Web Custom Format0"** — UTF-8 JSON array payload: `[{"row":1,"col":1,"content":"Cell(1,1)"}, ...]`. **No null terminator.** Renders through the cancellable delay loop. See `docs/web-custom-format.md`.
 
 ## Build & Run
 
@@ -36,6 +39,8 @@ dotnet run      # Run
 - DO call `OpenClipboard`/`CloseClipboard` inside `WM_RENDERALLFORMATS` (must open it yourself).
 - After `SetClipboardData(fmt, hGlobal)`, the clipboard owns the memory — do not `GlobalFree` it.
 - HTML clipboard format uses UTF-8 encoding, not UTF-16.
+- Web custom format data is UTF-8 JSON with **no null terminator** — the clipboard byte count is authoritative and a trailing NUL would break strict JSON parsers.
+- A single paste can trigger multiple `WM_RENDERFORMAT` messages (e.g., map + payload for the web custom format). Delay only the payload renders, not the metadata renders, to keep total paste latency bounded by one delay per paste.
 
 ## Knowledge Base Maintenance
 
